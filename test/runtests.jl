@@ -4,15 +4,9 @@ using Test
 using HTTP
 import JSON
 
-HTTPDownloads.set_http_backend()
+HTTPDownloads.set_downloads_backend()
 
 server = "https://httpbingo.julialang.org"
-
-#
-#   HTTP.delete │ [:headers]
-#      HTTP.get │ [:headers, :query, :readtimeout, :response_stream, :retry, :status_exception]
-#     HTTP.post │ [:headers, :readtimeout, :status_exception]
-#  HTTP.request │ [:body, :connecttimeout, :headers, :readtimeout, :retries, :status_exception]
 
 jsonbody(res::HTTP.Response) = JSON.parse(String(copy(res.body)))
 

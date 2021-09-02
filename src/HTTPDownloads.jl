@@ -179,13 +179,14 @@ function has_http_layer(stack, layer)
     end
 end
 
-function set_http_backend(use_downloads::Bool=true)
+function set_downloads_backend(use_downloads::Bool=true)
     stack = HTTP.stack()
     if use_downloads && !has_http_layer(stack, LibCurlLayer)
         HTTP.insert_default!(ConnectionPoolLayer, LibCurlLayer)
     elseif !use_downloads && has_http_layer(stack, LibCurlLayer)
         HTTP.remove_default!(ConnectionPoolLayer, LibCurlLayer)
     end
+    nothing
 end
 
 end
