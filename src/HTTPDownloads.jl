@@ -9,8 +9,8 @@ using HTTP
 
 abstract type LibCurlLayer{Next <: HTTP.Layer} <: HTTP.Layer{Next} end
 
-DOWNLOAD_LOCK = ReentrantLock()
-DOWNLOADER = Ref{Union{Nothing,Downloader}}(nothing)
+const DOWNLOAD_LOCK = ReentrantLock()
+const DOWNLOADER = Ref{Union{Nothing,Downloader}}(nothing)
 
 function http_easy_hook(easy, info)
     # Disable redirects - HTTP.jl will handle this.
