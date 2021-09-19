@@ -62,8 +62,7 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
             #
             # * require_ssl_verification=NetworkOptions.verify_host(...
             #     https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html
-            # * sslconfig::SSLConfig=nosslconfig,
-            #     ???
+            sslconfig=nothing,
 
             # * keepalive::Bool=false,
             #     https://curl.se/libcurl/c/CURLOPT_TCP_KEEPALIVE.html
@@ -88,15 +87,20 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
 
             kw...) where Next
 
-    if iofunction !== nothing || socket_type !== TCPSocket
-        # Fallback to pure-Julia implementation in ConnectionPool.
-        # This is required until we can figure out how to expose the iofunction
-        # callback interface via libcurl
+    if iofunction !== nothing    || socket_type !== TCPSocket || sslconfig !== nothing
+        # Fallback to pure-Julia implementation in HTTP.ConnectionPool.
+        #
+        # This is required until we can figure out how to expose various
+        # functionality via libcurl
+        if sslconfig === nothing
+            sslconfig = HTTP.ConnectionPool.nosslconfig
+        end
         HTTP.request(Next, url, req, body;
                      response_stream=response_stream,
                      iofunction=iofunction,
                      readtimeout=readtimeout,
                      socket_type=socket_type,
+                     sslconfig=sslconfig,
                      kw...)
     end
 
