@@ -60,7 +60,7 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
 
             # ConnectionPool / sslconnection
             #
-            # * require_ssl_verification=NetworkOptions.verify_host(host, "SSL"),
+            # * require_ssl_verification=NetworkOptions.verify_host(...
             #     https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html
             # * sslconfig::SSLConfig=nosslconfig,
             #     ???
@@ -72,13 +72,8 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
             # * readtimeout::Int=0,
             #     OK - use requests `timeout` keyword
 
-            # * sslconfig::SSLConfig=nosslconfig,
-            #     FIXME ca_roots ???
-
             # * proxy =
             #     https://curl.se/libcurl/c/CURLOPT_PROXY.html
-            # * require_ssl_verification = NetworkOptions.verify_host(host),
-            #     https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html
             # * reuse_limit =
             #     No equiv? Ignored for now
 
@@ -151,6 +146,15 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
         #
         if response.code == Curl.CURLE_OPERATION_TIMEDOUT
             throw(HTTP.TimeoutRequest.ReadTimeoutError(readtimeout))
+        elseif response.code in (Curl.CURLE_PEER_FAILED_VERIFICATION,
+                                 Curl.CURLE_SSL_CERTPROBLEM,
+                                 Curl.CURLE_SSL_CIPHER,
+                                 Curl.CURLE_SSL_CACERT_BADFILE,
+                                 Curl.CURLE_SSL_CRL_BADFILE,
+                                 Curl.CURLE_SSL_ISSUER_ERROR)
+            # SSL certificate problems - not retryable, so just throw the
+            # original error.
+            throw(response)
         else
             # Wrap other errors in HTTP.IOError. Downstream codes will likely
             # assume all such errors are retry-able
