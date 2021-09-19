@@ -95,13 +95,13 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
         if sslconfig === nothing
             sslconfig = HTTP.ConnectionPool.nosslconfig
         end
-        HTTP.request(Next, url, req, body;
-                     response_stream=response_stream,
-                     iofunction=iofunction,
-                     readtimeout=readtimeout,
-                     socket_type=socket_type,
-                     sslconfig=sslconfig,
-                     kw...)
+        return HTTP.request(Next, url, req, body;
+                            response_stream=response_stream,
+                            iofunction=iofunction,
+                            readtimeout=readtimeout,
+                            socket_type=socket_type,
+                            sslconfig=sslconfig,
+                            kw...)
     end
 
     input = req.body === HTTP.body_is_a_stream ? body :
