@@ -111,7 +111,11 @@ end
 @testset "Timeouts" begin
     @test HTTP.get("$bingoserver/delay/2", readtimeout=10) isa HTTP.Response
     @test_throws HTTP.TimeoutRequest.ReadTimeoutError HTTP.get("$bingoserver/delay/5", readtimeout=1)
-    # TODO: connect_timeout
+
+    # Test connection timeout by attempting to connect to an unroutable IP
+    # address. Discussion at
+    # https://stackoverflow.com/questions/100841/artificially-create-a-connection-timeout-error/37465639
+    @test_throws HTTP.TimeoutRequest.ReadTimeoutError HTTP.get("http://10.255.255.1", connect_timeout=1)
 end
 
 @testset "Redirects" begin
@@ -145,7 +149,15 @@ end
 
     # Test that we can access this server if we trust our test CA
     response = HTTP.get("https://localhost:$test_port",
-                        sslconfig=test_client_ssl_config(), retries=0)
+                        sslconfig=test_client_ssl_config(),
+                        require_ssl_verification=true,
+                        retries=0)
+    @test String(response.body) == "hello, world"
+    @test response.status == 200
+
+    response = HTTP.get("https://localhost:$test_port",
+                        require_ssl_verification=false,
+                        retries=0)
     @test String(response.body) == "hello, world"
     @test response.status == 200
 

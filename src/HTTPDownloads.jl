@@ -1,8 +1,17 @@
 module HTTPDownloads
 
-import Downloads: Downloads, Curl, Downloader
+# We vendor a copy of Downloads.jl. This is necessary because:
+#
+# * We need extensions to the version of Downloads which is distributed with
+#   julia-1.6
+# * As a stdlib it's impossible to install newer versions without upgrading
+#   Julia itself.
+include("Downloads.jl")
+
+import .Downloads: Downloads, Curl, Downloader
 
 using Sockets: TCPSocket
+import NetworkOptions
 
 using URIs
 using HTTP
@@ -15,6 +24,9 @@ const DOWNLOADER = Ref{Union{Nothing,Downloader}}(nothing)
 function http_easy_hook(easy, info)
     # Disable redirects - HTTP.jl will handle this.
     Curl.setopt(easy, Curl.CURLOPT_FOLLOWLOCATION, false)
+
+    # TODO: Figure out how to allow setting of
+    # https://curl.se/libcurl/c/CURLMOPT_MAXCONNECTS.html
 end
 
 function get_downloader()
@@ -30,9 +42,6 @@ function get_downloader()
     end
 end
 
-# Monkey-patch arg_read_size
-# See https://github.com/JuliaLang/Downloads.jl/issues/142
-Downloads.arg_read_size(io::Base.GenericIOBuffer) = bytesavailable(io)
 
 function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
             response_stream=nothing,
@@ -52,35 +61,30 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
             # ConnectionPool / getconnection / newconnection
             #
             # * connection_limit::Int=default_connection_limit,
+            #   We use the multi interface, so probably need to figure out how
+            #   to use the multi CURLMOPT_MAXCONNECTS.
+            #     https://curl.se/libcurl/c/CURLMOPT_MAXCONNECTS.html
             #     https://curl.se/libcurl/c/CURLOPT_MAXCONNECTS.html
+            #
             # * pipeline_limit::Int=1
             #     # likely will be deprecated in HTTP.jl - ignore
             # * idle_timeout::Int=0,
             #     # Similar to the Downloader's grace parameter
 
             # ConnectionPool / sslconnection
-            #
-            # * require_ssl_verification=NetworkOptions.verify_host(...
-            #     https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html
+            require_ssl_verification::Bool=NetworkOptions.verify_host(url.host, "SSL"),
             sslconfig=nothing,
 
-            # * keepalive::Bool=false,
-            #     https://curl.se/libcurl/c/CURLOPT_TCP_KEEPALIVE.html
-            # * connect_timeout::Int=0,
-            #     https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html
-            # * readtimeout::Int=0,
-            #     OK - use requests `timeout` keyword
+            keepalive::Bool=false,
+            connect_timeout::Int=0,
 
-            # * proxy =
-            #     https://curl.se/libcurl/c/CURLOPT_PROXY.html
+            proxy::Union{AbstractString,Nothing}=nothing,
             # * reuse_limit =
             #     No equiv? Ignored for now
 
             # # StreamLayer
             # * reached_redirect_limit=false,
             #     FIXME ???
-            # * response_stream=nothing,
-            #     Done.
             # * iofunction=nothing,
             #     TODO: Figure out callbacks?
             # * verbose::Int=0,
@@ -88,9 +92,10 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
             kw...) where Next
 
     if iofunction !== nothing    || socket_type !== TCPSocket || sslconfig !== nothing
-        # Fallback to pure-Julia implementation in HTTP.ConnectionPool.
+        # Fallback to pure-Julia implementation in HTTP.ConnectionPool for
+        # options we can't handle with libcurl.
         #
-        # This is required until we can figure out how to expose various
+        # FIXME: This is required until we can figure out how to expose this
         # functionality via libcurl
         if sslconfig === nothing
             sslconfig = HTTP.ConnectionPool.nosslconfig
@@ -111,14 +116,26 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
     output = response_stream
     if response_stream === nothing
         # HTTP.jl assumes you always want the body by default.
-        output_buf = IOBuffer()
-        if req.method != "HEAD"
-            # Workaround https://github.com/JuliaLang/Downloads.jl/pull/131
-            output = output_buf
+        output = output_buf = IOBuffer()
+    end
+
+    function per_request_easy_hook(easy)
+        if !require_ssl_verification
+            Curl.setopt(easy, Curl.CURLOPT_SSL_VERIFYPEER, false)
+        end
+        if keepalive
+            Curl.setopt(easy, Curl.CURLOPT_TCP_KEEPALIVE, true)
+        end
+        if proxy !== nothing
+            Curl.setopt(easy, Curl.CURLOPT_PROXY, proxy)
+        end
+        if connect_timeout > 0
+            Curl.setopt(easy, Curl.CURLOPT_CONNECTTIMEOUT, connect_timeout)
+            # See also https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT_MS.html
+            # if we want to allow subsecond timeouts.
         end
     end
 
-    # Use Downloads.jl
     response = Downloads.request(string(url);
         downloader = get_downloader(),
         method = req.method,
@@ -127,17 +144,23 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
         output = output,
         timeout = readtimeout <= 0 ? Inf : readtimeout,
         throw = false,
-        verbose = verbose > 0)
+        verbose = verbose > 0,
+        easy_hook = per_request_easy_hook)
 
     if response isa Downloads.RequestError
         # We couldn't even get a response. There's a huge list of possible
         # return codes in libcurl's curl.h.
         #
-        # On the other hand, users of HTTP.jl largely seem to match these based
-        # on whether they're "retryable", and expect to see HTTP.jl's error
-        # types.
+        # Users of HTTP.jl largely seem to match these based on whether they're
+        # "retryable", and expect to see HTTP.jl's error types. This informal
+        # API is hard to match! For now:
         #
-        # For example, AWS.jl has the following logic:
+        #   * If an error "seems retryable", wrap in HTTP.IOError
+        #   * For other cases, just throw the RequestError
+        #   * Ugh.
+        #
+        #
+        # As an example, AWS.jl has the following logic:
         #
         #  # Base.IOError is needed because HTTP.jl can often have errors that aren't
         #  # caught and wrapped in an HTTP.IOError
@@ -149,7 +172,14 @@ function HTTP.request(::Type{LibCurlLayer{Next}}, url::URI, req, body;
         #                  (isa(e, HTTP.StatusError) && _http_status(e) >= 500)
         #
         if response.code == Curl.CURLE_OPERATION_TIMEDOUT
-            throw(HTTP.TimeoutRequest.ReadTimeoutError(readtimeout))
+            # HTTP throws
+            #   * HTTP.TimeoutRequest.ReadTimeoutError for readtimeout
+            #   * HTTP.ConnectionPool.ConnectTimeout   for connect_timeout
+            # CURL doesn't distinguish between these however, so it's not easy
+            # to know which one we've hit here.
+            t = readtimeout > 0 ? readtimeout : connect_timeout
+            throw(HTTP.TimeoutRequest.ReadTimeoutError(t))
+            # TODO: Would it be better just to throw(response) ??
         elseif response.code in (Curl.CURLE_PEER_FAILED_VERIFICATION,
                                  Curl.CURLE_SSL_CERTPROBLEM,
                                  Curl.CURLE_SSL_CIPHER,

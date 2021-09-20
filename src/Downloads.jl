@@ -17,8 +17,17 @@ using Base.Experimental: @sync
 using NetworkOptions
 using ArgTools
 
-include("Curl/Curl.jl")
-using .Curl
+#------------ Begin horrible vendoring hacks
+module DownloadsWrapper
+    using Downloads
+end
+const RealDownloads = DownloadsWrapper.Downloads
+# Use the RealDownloads versions of these types, as it's possible to leak
+# this RequestError type from the HTTPDownloads interface via a throw().
+const RequestError = DownloadsWrapper.Downloads.RequestError
+const Response = DownloadsWrapper.Downloads.Response
+using .RealDownloads.Curl
+#------------ End horrible vendoring hacks
 
 export download, request, Downloader, Response, RequestError
 
@@ -50,10 +59,6 @@ function grace_ms(grace::Real)
     grace <= typemax(UInt64) ÷ 1000 ? round(UInt64, 1000*grace) : typemax(UInt64)
 end
 
-function easy_hook(downloader::Downloader, easy::Easy, info::NamedTuple)
-    downloader.easy_hook !== nothing && downloader.easy_hook(easy, info)
-end
-
 get_ca_roots() = Curl.SYSTEM_SSL ? ca_roots() : ca_roots_path()
 
 function set_ca_roots(downloader::Downloader, easy::Easy)
@@ -65,6 +70,7 @@ const DOWNLOAD_LOCK = ReentrantLock()
 const DOWNLOADER = Ref{Union{Downloader, Nothing}}(nothing)
 const EASY_HOOK = Ref{Union{Function, Nothing}}(nothing)
 
+#=
 """
     struct Response
         proto   :: String
@@ -155,6 +161,7 @@ function error_message(err::RequestError)
 
     return "$message ($errstr)"
 end
+=#
 
 ## download API ##
 
@@ -289,6 +296,7 @@ function request(
     verbose    :: Bool = false,
     throw      :: Bool = true,
     downloader :: Union{Downloader, Nothing} = nothing,
+    easy_hook  :: Union{Function, Nothing} = nothing
 ) :: Union{Response, RequestError}
     lock(DOWNLOAD_LOCK) do
         yield() # let other downloads finish
@@ -338,8 +346,11 @@ function request(
                 method !== nothing && set_method(easy, method)
                 progress !== nothing && enable_progress(easy)
                 set_ca_roots(downloader, easy)
+
+                # Apply user-defined customizations to the Curl easy handle
                 info = (url = url, method = method, headers = headers)
-                easy_hook(downloader, easy, info)
+                downloader.easy_hook !== nothing && downloader.easy_hook(easy, info)
+                easy_hook !== nothing && easy_hook(easy)
 
                 # do the request
                 add_handle(downloader.multi, easy)
