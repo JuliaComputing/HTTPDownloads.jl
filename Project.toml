@@ -1,7 +1,7 @@
 name = "HTTPDownloads"
 uuid = "a1e35db8-64d0-4469-a01a-344a959b690d"
 authors = ["Chris Foster <chris42f@gmail.com> and contributors"]
-version = "0.1.1"
+version = "0.1.2"
 
 [deps]
 ArgTools = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
