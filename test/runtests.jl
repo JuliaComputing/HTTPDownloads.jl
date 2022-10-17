@@ -110,12 +110,12 @@ end
 
 @testset "Timeouts" begin
     @test HTTP.get("$bingoserver/delay/2", readtimeout=10) isa HTTP.Response
-    @test_throws HTTP.TimeoutRequest.ReadTimeoutError HTTP.get("$bingoserver/delay/5", readtimeout=1)
+    @test_throws HTTP.TimeoutError HTTP.get("$bingoserver/delay/5", readtimeout=1)
 
     # Test connection timeout by attempting to connect to an unroutable IP
     # address. Discussion at
     # https://stackoverflow.com/questions/100841/artificially-create-a-connection-timeout-error/37465639
-    @test_throws HTTP.TimeoutRequest.ReadTimeoutError HTTP.get("http://10.255.255.1", connect_timeout=1)
+    @test_throws HTTP.TimeoutError HTTP.get("http://10.255.255.1", connect_timeout=1)
 end
 
 @testset "Redirects" begin

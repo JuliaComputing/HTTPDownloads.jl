@@ -16,6 +16,7 @@ module Downloads
 using Base.Experimental: @sync
 using NetworkOptions
 using ArgTools
+using HTTP
 
 #------------ Begin horrible vendoring hacks
 module DownloadsWrapper
@@ -241,6 +242,31 @@ function download(
     end
 end
 
+decompress_if_required(easy::Easy, output, decompress::Union{Bool,Nothing}) = output
+function decompress_if_required(easy::Easy, output::Union{IOBuffer,IO}, decompress::Union{Bool,Nothing})
+    if decompress === nothing
+        # need to figure out if we need to decompress from headers
+        decompress = false
+        for hdr in easy.res_hdrs
+            if (m = match(r"^(\S[^:]*?)\s*:\s*(.*?)\s*$", hdr); m) !== nothing
+                key = lowercase(m.captures[1]::SubString{String})
+                val = m.captures[2]::SubString{String}
+                if key == "content-encoding" && val == "gzip"
+                    decompress = true
+                    break
+                end
+            end
+        end
+    end
+    if decompress
+        return HTTP.StreamRequest.GzipDecompressorStream(output)
+    else
+        return output
+    end
+end
+
+
+
 ## request API ##
 
 """
@@ -296,7 +322,8 @@ function request(
     verbose    :: Bool = false,
     throw      :: Bool = true,
     downloader :: Union{Downloader, Nothing} = nothing,
-    easy_hook  :: Union{Function, Nothing} = nothing
+    easy_hook  :: Union{Function, Nothing} = nothing,
+    decompress :: Union{Bool, Nothing} = nothing,
 ) :: Union{Response, RequestError}
     lock(DOWNLOAD_LOCK) do
         yield() # let other downloads finish
@@ -354,10 +381,14 @@ function request(
 
                 # do the request
                 add_handle(downloader.multi, easy)
+                decompressed_output = nothing
                 try # ensure handle is removed
                     @sync begin
                         @async for buf in easy.output
-                            write(output, buf)
+                            if decompressed_output === nothing
+                                decompressed_output = decompress_if_required(easy, output, decompress)
+                            end
+                            write(decompressed_output, buf)
                         end
                         if progress !== nothing
                             @async for prog in easy.progress
@@ -369,6 +400,9 @@ function request(
                         end
                     end
                 finally
+                    if decompressed_output !== nothing
+                        flush(decompressed_output)
+                    end
                     remove_handle(downloader.multi, easy)
                 end
 
